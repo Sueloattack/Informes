@@ -43,11 +43,28 @@ COLUMN_NAME_MAPPING_EXPORT = {
     COL_CUENTA_COBRO: "Cuenta de Cobro",
     COL_ESTATUS: "Estatus",
     COL_VR_GLOSA: "Valor Glosa",
-    
-    "TipoFila": "Tipo de Fila",
-    "Total_Items_Factura": "Total Ítems en Factura",
-    "Items_ConCC_ConFR": "CC y Con FR",
-    "Items_ConCC_SinFR": "CC y Sin FR",
-    "Items_SinCC_ConFR": "CC y Con FR",
-    "Items_SinCC_SinFR": "CC y Sin FR"
-}
+}   
+
+COLUMNAS_FINALES_ORDENADAS = [
+    # Identificación
+    COL_SERIE,
+    COL_N_FACTURA,
+    COL_FACTURA_CONCAT,
+    COL_GL_DOCN,
+    COL_ENTIDAD,
+    # Fechas
+    COL_FECHA_OBJECION,
+    COL_FECHA_CONTESTACION,
+    COL_FECHA_RADICADO,
+    # Estado y valor
+    COL_CUENTA_COBRO,
+    COL_ESTATUS,
+    COL_VR_GLOSA,
+    # Columnas generadas
+    "Tipo de Fila",
+    "Total Items Factura",
+    "Con CC y Con FR",
+    "Con CC y Sin FR",
+    "Sin CC y Sin FR",
+    "Sin CC y Con FR",
+]

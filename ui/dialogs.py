@@ -17,5 +17,5 @@ def seleccionar_ruta_salida():
         title="Guardar reporte final como...",
         filetypes=[("Archivo de Excel", "*.xlsx")],
         defaultextension=".xlsx",
-        initialfile="Reporte_Clasificado.xlsx"
+        initialfile="Reporte de Radicación Año.xlsx"
     )
