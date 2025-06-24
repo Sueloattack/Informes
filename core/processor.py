@@ -8,57 +8,66 @@ import pandas as pd
 
 def cargar_y_limpiar_base(ruta_archivo: str) -> pl.DataFrame | None:
     """
-    Función que carga y limpia los datos base.
+    Función final y robusta que carga y limpia los datos base, manejando
+    diferentes tipos de datos de entrada en las columnas de fecha.
     """
     print("1. Iniciando carga y procesamiento...")
     try:
+        # 1. Carga inicial, dejando que Polars infiera tipos.
         df_raw = pl.read_excel(source=ruta_archivo, sheet_name=cfg.NOMBRE_HOJA_POR_DEFECTO)
         df_raw = df_raw.select([col for col in cfg.COLUMNAS_ORIGINALES if col in df_raw.columns])
-        
+
+        # 2. Fecha base para la conversión.
         fecha_base_excel = pl.date(1899, 12, 30)
 
+        # 3. Lógica de transformación paso a paso y segura.
+        lazy_df = df_raw.lazy().filter(pl.col(cfg.COL_ESTATUS).is_in(cfg.ESTATUS_VALIDOS))
+
+        # ---- LÓGICA CONDICIONAL PARA `fecha_rep` ----
+        # 4. Revisamos el tipo de dato de la columna 'fecha_rep'
+        if df_raw.schema[cfg.COL_FECHA_RADICADO] == pl.String:
+            print("   - Detectado: 'fecha_rep' es de tipo String. Aplicando limpieza de texto...")
+            # Si es texto, primero limpiamos " - - " y luego convertimos
+            lazy_df = lazy_df.with_columns(
+                pl.when(pl.col(cfg.COL_FECHA_RADICADO).str.contains(cfg.TEXTO_NULO_FECHA))
+                  .then(None)
+                  .otherwise(pl.col(cfg.COL_FECHA_RADICADO))
+                  .alias(cfg.COL_FECHA_RADICADO)
+            )
+        else:
+            print("   - Detectado: 'fecha_rep' es de tipo numérico. No se necesita limpieza de texto.")
+        
+        # 5. Transformación final, ahora con la garantía de tipos correctos.
         df_limpio = (
-            df_raw.lazy()
-            .filter(pl.col(cfg.COL_ESTATUS).is_in(cfg.ESTATUS_VALIDOS))
-            
-            # --- PRIMER PASO: Convertir a Datetime (con hora) ---
-            .with_columns(
-                # Columnas numéricas a Datetime
+            lazy_df.with_columns(
+                # Columnas numéricas a fecha
                 (fecha_base_excel + pl.duration(days=pl.col(c))).alias(c) 
                 for c in [cfg.COL_FECHA_OBJECION, cfg.COL_FECHA_CONTESTACION]
             )
             .with_columns(
-                # Limpieza de fecha_rep (se mantiene)
-                pl.when(pl.col(cfg.COL_FECHA_RADICADO).str.contains(cfg.TEXTO_NULO_FECHA))
-                  .then(None).otherwise(pl.col(cfg.COL_FECHA_RADICADO)).alias(cfg.COL_FECHA_RADICADO)
+                # Conversión final de fecha_rep (que ya es o null o número en string/int)
+                (fecha_base_excel + pl.duration(days=pl.col(cfg.COL_FECHA_RADICADO).cast(pl.Int64, strict=False)))
+                .alias(cfg.COL_FECHA_RADICADO)
             )
             .with_columns(
-                # Conversión de fecha_rep (limpia) a Datetime
-                (fecha_base_excel + pl.duration(days=pl.col(cfg.COL_FECHA_RADICADO).cast(pl.Int64, strict=False)))
-                .alias(cfg.COL_FECHA_RADICADO),
-                
-                # Conversión de números (sin cambios)
+                # Conversiones numéricas y de texto (sin cambios)
                 pl.col(cfg.COLUMNAS_DOCN).cast(pl.Utf8).str.replace_all(r"\.", "").cast(pl.Int64, strict=False),
                 pl.col(cfg.COL_VR_GLOSA).cast(pl.Utf8).str.replace_all(r",", ".").cast(pl.Float64, strict=False).fill_null(0),
-                pl.col(cfg.COL_CUENTA_COBRO).cast(pl.Utf8).str.replace_all(r"\.", "").cast(pl.Int64, strict=False).fill_null(0)
-            )
-
-            # --- SEGUNDO PASO: Truncar TODAS las fechas a Date (sin hora) ---
-            .with_columns(
+                pl.col(cfg.COL_CUENTA_COBRO).cast(pl.Utf8).str.replace_all(r"\.", "").cast(pl.Int64, strict=False).fill_null(0),
+                # Truncar todas las fechas a Date
                 pl.col(cfg.COLUMNAS_FECHA).dt.date()
             )
-            
-            # --- TERCER PASO: Crear la columna de factura concatenada ---
             .with_columns(
                 pl.concat_str([pl.col(cfg.COL_SERIE), pl.col(cfg.COL_N_FACTURA).cast(pl.Utf8)], separator="").alias(cfg.COL_FACTURA_CONCAT)
             )
             .collect())
-        
+            
         print("2. Datos base limpios y listos para clasificación.")
         return df_limpio
     
     except Exception as e:
-        print(f"ERROR crítico durante la carga o limpieza: {e}"); return None
+        print(f"ERROR crítico durante la carga o limpieza: {e}")
+        return None
 
 def obtener_facturas_puras(df_base: pl.DataFrame, condicion: pl.Expr) -> pl.DataFrame:
     df_con_evaluacion = df_base.with_columns(es_factura_pura=condicion.all().over(cfg.COLUMNAS_FACTURA))
