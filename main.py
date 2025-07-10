@@ -59,7 +59,7 @@ def main_flow():
         "Con CC y Sin FR": processor.crear_tabla_resumen_detalle(items_t2),
         "Sin CC y Sin FR": processor.crear_tabla_resumen_detalle(items_t3),
         "Sin CC y Con FR": processor.crear_tabla_resumen_detalle(items_t4),
-        "Mixtas": processor.crear_tabla_resumen_detalle(items_t5),
+        "Inconsistencias": processor.crear_tabla_resumen_detalle(items_t5),
     }
     
     ruta_salida = dialogs.seleccionar_ruta_salida()

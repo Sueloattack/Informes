@@ -4,71 +4,84 @@ import xlsxwriter
 from settings import config as cfg
 import pandas as pd
 
-# En core/processor.py
-
+def print_debug_info(step_name, df, columns_to_show):
+    """Función auxiliar para imprimir el estado del DataFrame en un punto de depuración."""
+    print(f"\n--- DEBUG: {step_name} ---")
+    if all(col in df.columns for col in columns_to_show):
+        print("Columnas relevantes y sus tipos:")
+        for col in columns_to_show:
+            print(f"  - {col}: {df.schema[col]}")
+        print("Primeros 5 valores:")
+        print(df.select(columns_to_show).head())
+    else:
+        print(f"  (Una o más columnas de {columns_to_show} no existen en este paso)")
+    print("------------------------------------------")
+    
 def cargar_y_limpiar_base(ruta_archivo: str) -> pl.DataFrame | None:
     """
-    Función final y robusta que carga y limpia los datos base, manejando
-    diferentes tipos de datos de entrada en las columnas de fecha.
+    Versión final y correcta. No procesa las fechas que ya son correctas
+    y aplica el tratamiento especial únicamente a 'fecha_rep'.
     """
     print("1. Iniciando carga y procesamiento...")
     try:
-        # 1. Carga inicial, dejando que Polars infiera tipos.
+        # 1. Carga inicial. Polars convertirá 'fecha_objecion' y 'fecha_contestacion'
+        # a datetime automáticamente porque reconoce el formato.
         df_raw = pl.read_excel(source=ruta_archivo, sheet_name=cfg.NOMBRE_HOJA_POR_DEFECTO)
-        df_raw = df_raw.select([col for col in cfg.COLUMNAS_ORIGINALES if col in df_raw.columns])
-
-        # 2. Fecha base para la conversión.
-        fecha_base_excel = pl.date(1899, 12, 30)
-
-        # 3. Lógica de transformación paso a paso y segura.
+        
         lazy_df = df_raw.lazy().filter(pl.col(cfg.COL_ESTATUS).is_in(cfg.ESTATUS_VALIDOS))
+        
+        # --- PASO 1: DEJAR LAS FECHAS CORRECTAS EN PAZ ---
+        # No se aplica ningún tratamiento a 'fecha_objecion' y 'fecha_contestacion'.
+        # Ya fueron leídas correctamente.
+        print("   - 'fecha_objecion' y 'fecha_contestacion' se asumen correctas desde la carga.")
 
-        # ---- LÓGICA CONDICIONAL PARA `fecha_rep` ----
-        # 4. Revisamos el tipo de dato de la columna 'fecha_rep'
+        # --- PASO 2: APLICAR TRATAMIENTO ESPECIAL SOLO A 'fecha_rep' ---
+        # Verificamos si es texto y la parseamos. Es la única que lo necesita.
         if df_raw.schema[cfg.COL_FECHA_RADICADO] == pl.String:
-            print("   - Detectado: 'fecha_rep' es de tipo String. Aplicando limpieza de texto...")
-            # Si es texto, primero limpiamos " - - " y luego convertimos
+            print(f"   - Tratamiento especial para '{cfg.COL_FECHA_RADICADO}': Detectada como STRING. Parseando texto...")
             lazy_df = lazy_df.with_columns(
                 pl.when(pl.col(cfg.COL_FECHA_RADICADO).str.contains(cfg.TEXTO_NULO_FECHA))
-                  .then(None)
-                  .otherwise(pl.col(cfg.COL_FECHA_RADICADO))
-                  .alias(cfg.COL_FECHA_RADICADO)
-            )
-        else:
-            print("   - Detectado: 'fecha_rep' es de tipo numérico. No se necesita limpieza de texto.")
-        
-        # 5. Transformación final, ahora con la garantía de tipos correctos.
-        df_limpio = (
-            lazy_df.with_columns(
-                # Columnas numéricas a fecha
-                (fecha_base_excel + pl.duration(days=pl.col(c))).alias(c) 
-                for c in [cfg.COL_FECHA_OBJECION, cfg.COL_FECHA_CONTESTACION]
-            )
-            .with_columns(
-                # Conversión final de fecha_rep (que ya es o null o número en string/int)
-                (fecha_base_excel + pl.duration(days=pl.col(cfg.COL_FECHA_RADICADO).cast(pl.Int64, strict=False)))
+                .then(None)
+                .otherwise(
+                    pl.col(cfg.COL_FECHA_RADICADO).str.to_datetime(
+                        format="%Y-%m-%d %H:%M:%S", # El formato que sabemos que funciona para esta columna
+                        strict=False
+                    )
+                )
                 .alias(cfg.COL_FECHA_RADICADO)
             )
-            .with_columns(
-                # Conversiones numéricas y de texto (sin cambios)
+        else:
+            # Fallback por si en algún archivo 'fecha_rep' viniera como número
+            print(f"   - Tratamiento para '{cfg.COL_FECHA_RADICADO}': Detectada como NUMÉRICA.")
+            fecha_base_excel = pl.date(1899, 12, 30)
+            lazy_df = lazy_df.with_columns(
+                (fecha_base_excel + pl.duration(days=pl.col(cfg.COL_FECHA_RADICADO)))
+                .alias(cfg.COL_FECHA_RADICADO)
+            )
+
+        # --- PASO 3: Transformaciones finales y estandarización ---
+        df_limpio = (
+            lazy_df.with_columns(
+                # Otras conversiones numéricas y de texto
                 pl.col(cfg.COLUMNAS_DOCN).cast(pl.Utf8).str.replace_all(r"\.", "").cast(pl.Int64, strict=False),
                 pl.col(cfg.COL_VR_GLOSA).cast(pl.Utf8).str.replace_all(r",", ".").cast(pl.Float64, strict=False).fill_null(0),
                 pl.col(cfg.COL_CUENTA_COBRO).cast(pl.Utf8).str.replace_all(r"\.", "").cast(pl.Int64, strict=False).fill_null(0),
-                # Truncar todas las fechas a Date
+                
+                # UNIFICACIÓN FINAL: Quitar la hora a TODAS las columnas de fecha para que sean 'Date'
                 pl.col(cfg.COLUMNAS_FECHA).dt.date()
-            )
-            .with_columns(
+                
+            ).with_columns(
                 pl.concat_str([pl.col(cfg.COL_SERIE), pl.col(cfg.COL_N_FACTURA).cast(pl.Utf8)], separator="").alias(cfg.COL_FACTURA_CONCAT)
-            )
-            .collect())
-            
+            ).collect()
+        )
+        
         print("2. Datos base limpios y listos para clasificación.")
         return df_limpio
     
     except Exception as e:
         print(f"ERROR crítico durante la carga o limpieza: {e}")
         return None
-
+    
 def obtener_facturas_puras(df_base: pl.DataFrame, condicion: pl.Expr) -> pl.DataFrame:
     df_con_evaluacion = df_base.with_columns(es_factura_pura=condicion.all().over(cfg.COLUMNAS_FACTURA))
     return df_con_evaluacion.filter(pl.col("es_factura_pura")).drop("es_factura_pura")
